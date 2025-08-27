@@ -3,7 +3,6 @@
 This tool enables the modification of RSTP/STP per-port cost on UniFi switches and provides a method to keep the configuration quasi-persistent.
 
 ---
-## Version History
 
 ## Quick Start
 
