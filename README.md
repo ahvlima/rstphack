@@ -1,8 +1,9 @@
 # RSTPHack – UniFi RSTP/STP Per-Port Cost Hack
 
-This tool enables the modification of RSTP/STP per-port cost on UniFi switches and provides a method to keep the configuration persistent.
+This tool enables the modification of RSTP/STP per-port cost on UniFi switches and provides a method to keep the configuration quasi-persistent.
 
 ---
+## Version History
 
 ## Quick Start
 
@@ -75,6 +76,7 @@ WantedBy=timers.target
 
 Enable and start the timer:  
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable --now rstphack.timer
 ```
 
@@ -93,7 +95,7 @@ To date, no native mechanism ensures persistence of these settings.
 
 > **Note:** Not all UniFi switches support programmatic per-port cost changes. See [Prerequisites](#prerequisites).
 
-This workaround is not straightforward to implement but provides a practical solution to make per-port cost settings “semi-persistent.”  
+This workaround is not straightforward to implement but provides a practical solution to make per-port cost settings “quasi-persistent.”  
 
 The method relies on a Python script that:  
 1. Queries the UniFi Controller for per-port configuration.  
@@ -118,7 +120,7 @@ The scheduling interval must balance:
 The script interacts with the unpublished UniFi Controller API and uses SSH to apply changes on the switch:
 
 1. Authenticate with the Controller.  
-2. Retrieve port configurations using the switch MAC address.  
+2. Retrieve port configurations using the switch MAC address. 
 3. Extract STP cost (`stp_pathcost`) and port media type.  
 4. Compare current and desired costs.  
 5. If changes are needed, generate the correct port identifier (based on media type).  
@@ -126,7 +128,8 @@ The script interacts with the unpublished UniFi Controller API and uses SSH to a
    ```
    cli -c "configure" -c "interface {if_id}" -c "spanning-tree cost {required_cost}"
    ```  
-7. Wait for the Controller to reflect the updated state.  
+
+> **Note:** There is no programatically way to ensure the command executed correctly on the switch, except for waiting for the new state to propagate to the UniFi Controller.
 
 ---
 
@@ -229,7 +232,7 @@ The script maps ports automatically:
 
 ## SSH Authentication
 
-Authentication is via SSH keys. By default, the script uses `~/.ssh/id_rsa`. It assumes seamless SSH access (key installed and host known).  
+Authentication with the switch is via SSH keys, that is setup using the UniFi Controller UI (`Device&rarr;->Device Updates and Settings` on the top right corner).
 
 ---
 
@@ -247,7 +250,7 @@ Exit codes:
 
 ## Security Considerations
 
-- **SSL Verification** is disabled for Controller access. This avoids connection issues but reduces security.  
+- **SSL Verification** is disabled for Controller access. This avoids connection issues and complex settings.   
 
 ---
 
@@ -305,3 +308,11 @@ And to see logs of the service runs:
 ```bash
 journalctl -u rstphack.service
 ```
+
+---
+
+
+## Version History
+
+- **0.9.1** – Added systemd unit files and instructions.  
+- **0.9** – Initial release with cron example.

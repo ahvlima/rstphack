@@ -1,0 +1,7 @@
+[Unit]
+Description=RSTPHack UniFi Port Cost Adjuster
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rstphack -q 00:11:22:33:44:55 3 200000 admin@192.168.1.10

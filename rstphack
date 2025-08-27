@@ -2,6 +2,7 @@
 #!/usr/bin/env -S sh -c 'exec "$(dirname "$0")/.venv/bin/python3" "$0" "$@"'
 # © Copyright 2025 - Arnaldo Viegas de Lima
 # RSTPHack - UniFi RSTP/STP Per-Port Cost Hack
+# Version 0.9
 
 import requests
 import json
