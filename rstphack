@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+#!/usr/bin/env -S sh -c 'exec "$(dirname "$0")/.venv/bin/python3" "$0" "$@"'
+# © Copyright 2025 - Arnaldo Viegas de Lima
+# RSTPHack - UniFi RSTP/STP Per-Port Cost Hack
+
+import requests
+import json
+import os
+import sys
+import urllib3
+from urllib.parse import urljoin
+
+# Disable SSL warnings and verification globally
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+urllib3.disable_warnings(urllib3.exceptions.InsecurePlatformWarning)
+
+class UniFiSTPManager:
+    def __init__(self, quiet_mode=False, dry_run=False):
+        # Hardcoded UniFi Controller credentials and settings
+        self.controller_url = "https://controller:443"  # Change to your controller URL
+        self.username = "userid"                        # Change to your username
+        self.password = "password"                      # Change to your password
+        self.site = "default"                           # Change to your site name
+        
+        # Mode flags
+        self.quiet = quiet_mode
+        self.dry_run = dry_run
+        
+        # Session for maintaining authentication
+        self.session = requests.Session()
+        self.session.verify = False                     # Disable SSL verification for self-signed certs
+        
+        # Additional SSL configuration to ignore all certificate issues
+        self.session.trust_env = False                  # Don't use system CA certificates
+        
+        # Ensure cookies are properly handled
+        self.session.headers.update({
+            'User-Agent': 'UniFi-RSTP-Hack/1.0',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        })
+        
+        # SSH connection info will be passed directly to methods
+        
+    def info_print(self, message):
+        """Print message only if not in quiet mode"""
+        if not self.quiet:
+            print(message)
+        
+    def login_to_controller(self):
+        """Login to UniFi Controller and get session cookie"""
+        try:
+            login_url = urljoin(self.controller_url, f"/api/auth/login")
+            login_data = {
+                "username": self.username,
+                "password": self.password
+            }
+            
+            # Ensure SSL verification is disabled for this request
+            response = self.session.post(login_url, json=login_data, verify=False)
+            response.raise_for_status()
+            
+            # Check if login was successful
+            if response.status_code == 200:
+                # Check if we received cookies (auth token) in the response
+                if response.cookies:
+                    self.info_print(f"✓ Successfully logged into UniFi Controller")
+                    return True
+                else:
+                    print("✗ No cookies received during login. Authentication failed.")
+                    print("  This usually means invalid credentials or the controller requires different authentication.")
+                    return False
+            else:
+                print(f"✗ Login failed with status code: {response.status_code}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Error connecting to UniFi Controller: {e}")
+            return False
+    
+    def get_device_info(self, mac_address):
+        """Retrieve device information using MAC address"""
+        try:
+            device_url = urljoin(self.controller_url, f"/proxy/network/api/s/{self.site}/stat/device")
+            
+            # Create JSON payload for server-side MAC filtering
+            payload = {"macs": [mac_address.lower()]}
+            
+            # Use GET request with JSON payload in body (UniFi API specific)
+            response = self.session.get(device_url, json=payload, verify=False)
+            response.raise_for_status()
+            
+            response_data = response.json()
+            
+            # Check if the response has the correct structure
+            if not isinstance(response_data, dict):
+                print(f"✗ Invalid response format: expected dict, got {type(response_data)}")
+                return None
+            
+            # Check if rc = "ok"
+            meta = response_data.get('meta', {})
+            if meta.get('rc') != 'ok':
+                print(f"✗ API request failed: {meta.get('rc', 'unknown error')}")
+                return None
+            
+            # Get the data array
+            data = response_data.get('data', [])
+            if not data or len(data) == 0:
+                print(f"✗ No device data returned for MAC {mac_address}")
+                return None
+            
+            # Get the first (and should be only) device from data array
+            device = data[0]
+            
+            # Verify port_table exists
+            if 'port_table' not in device:
+                print(f"✗ Device missing port_table for MAC {mac_address}")
+                return None
+            
+            self.info_print(f"✓ Found device: {device.get('name', 'Unknown')}")
+            return device
+            
+        except requests.exceptions.RequestException as e:
+            print(f"✗ Error retrieving device info: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            print(f"✗ Error parsing device response: {e}")
+            return None
+    
+    def get_port_stp_info(self, device, port_idx):
+        """Get STP information for a specific port"""
+        try:
+            port_table = device.get('port_table', [])
+            
+            for port in port_table:
+                if port.get('port_idx') == port_idx:
+                    stp_cost = port.get('stp_pathcost', 0)
+                    media = port.get('media', '')
+                    port_name = port.get('name', f'Port {port_idx}')
+                    
+                    self.info_print(f"✓ Port {port_idx} ({port_name}): STP Cost = {stp_cost}, Media = {media}")
+                    return stp_cost, media
+            
+            print(f"✗ Port {port_idx} not found in device")
+            return None, None
+            
+        except Exception as e:
+            print(f"✗ Error getting port STP info: {e}")
+            return None, None
+    
+    def modify_stp_cost(self, port_idx, media, required_cost, user_host):
+        """Modify STP cost via SSH"""
+        try:
+            # Parse user@ip_address format
+            if '@' not in user_host:
+                print("✗ Invalid format. Use 'user@ip_address'")
+                return False
+            
+            user, host_ip = user_host.split('@', 1)
+            
+            # Determine interface ID based on media type
+            if 'ge' in media.lower() or 'gigabit' in media.lower():
+                if_id = f"gi{port_idx}"
+            elif 'xg' in media.lower() or '10g' in media.lower():
+                if_id = f"te{port_idx}"
+            else:
+                # Default to gigabit if media type is unclear
+                if_id = f"gi{port_idx}"
+            
+            # Construct the command
+            command = f'cli -E -c "configure" -c "interface {if_id}" -c "spanning-tree cost {required_cost}"'
+            
+            self.info_print(f"Executing command on switch: {command}")
+            
+            # Execute SSH command using simple os.system call
+            ssh_cmd = f"ssh {user}@{host_ip} '{command}'"
+            
+            # In quiet mode, redirect output to /dev/null
+            if self.quiet:
+                ssh_cmd += " >/dev/null 2>&1"
+            
+            # Check if this is a dry run
+            if self.dry_run:
+                self.info_print(f"[DRY RUN] Would execute: {ssh_cmd}")
+                self.info_print(f"[DRY RUN] STP cost command would be executed on switch")
+                return True
+            else:
+                os.system(ssh_cmd)
+                self.info_print(f"STP cost command executed on switch")
+                return True
+                
+        except Exception as e:
+            print(f"✗ Error modifying STP cost: {e}")
+            return False
+        
+    def run(self, switch_mac, port_idx, required_cost, user_host, quiet_mode=False):
+        """Main execution flow"""
+        try:
+            if not quiet_mode:
+                self.info_print(f"=== UniFi RSTP/STP Cost Manager ===")
+                self.info_print(f"Switch MAC: {switch_mac}")
+                self.info_print(f"Port: {port_idx}")
+                self.info_print(f"Required STP Cost: {required_cost}")
+                self.info_print(f"Switch: {user_host}")
+                self.info_print("")
+            
+            # Step 1: Connect to UniFi Controller
+            if not self.login_to_controller():
+                return False
+            
+            # Step 2: Retrieve device information
+            device = self.get_device_info(switch_mac)
+            if not device:
+                return False
+            
+            # Step 3: Get current STP information
+            current_cost, media = self.get_port_stp_info(device, port_idx)
+            if current_cost is None:
+                return False
+            
+            # Step 4: Check if cost is already correct
+            if current_cost == required_cost:
+                self.info_print(f"✓ STP cost is already {current_cost}. No changes needed.")
+                return True
+            
+            self.info_print(f"Current STP cost: {current_cost}, Required: {required_cost}")
+            self.info_print("Modifying STP cost...")
+            
+            # Step 5: Modify STP cost via SSH
+            if not self.modify_stp_cost(port_idx, media, required_cost, user_host):
+                return False
+            
+            self.info_print("✓ All operations completed successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"✗ Unexpected error: {e}")
+            return False
+
+def main():
+    """Main function to handle command line arguments and execute the script"""
+    # Check for flags
+    quiet_mode = False
+    dry_run = False
+    args = sys.argv[1:]
+    
+    if '-q' in args or '--quiet' in args:
+        quiet_mode = True
+        args = [arg for arg in args if arg not in ['-q', '--quiet']]
+    
+    if '-d' in args or '--dryrun' in args:
+        dry_run = True
+        args = [arg for arg in args if arg not in ['-d', '--dryrun']]
+    
+    if len(args) != 4:
+        print("Usage: rstphack [-q|--quiet] [-d|--dryrun] <switch_mac> <port_idx> <required_stp_cost> <user@ip_address>")
+        print("Example: rstphack 00:11:22:33:44:55 1 200000 admin@192.168.1.10")
+        print("Options:")
+        print("  -q, --quiet    Suppress informational messages (errors still shown)")
+        print("  -d, --dryrun   Show what would be executed without actually executing SSH commands")
+        sys.exit(1)
+    
+    switch_mac = args[0]
+    port_idx = int(args[1])
+    required_cost = int(args[2])
+    user_host = args[3]
+    
+    # Validate inputs
+    if port_idx < 0:
+        print("✗ Port index must be a positive integer")
+        sys.exit(1)
+    
+    if required_cost < 1 or required_cost > 200000000:
+        print("✗ STP cost must be between 1 and 200000000")
+        sys.exit(1)
+    
+    # Create and run the STP manager
+    stp_manager = UniFiSTPManager(quiet_mode=quiet_mode, dry_run=dry_run)
+    success = stp_manager.run(switch_mac, port_idx, required_cost, user_host, quiet_mode)
+    
+    if success:
+        sys.exit(0)
+    else:
+        print("\n=== Operation failed ===")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
