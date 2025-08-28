@@ -4,6 +4,15 @@ This tool enables the modification of RSTP/STP per-port cost on UniFi switches a
 
 ---
 
+## Motivation
+
+Ubiquiti does not provide an official method to adjust RSTP/STP per-port costs on UniFi switches.  
+While it is possible to connect via SSH and use well-known commands to modify these values, such changes are **not persistent**: they are lost after a reboot or reprovisioning.  
+
+To date, no native mechanism ensures persistence of these settings.
+
+---
+
 ## Quick Start
 
 1. **Install dependencies**  
@@ -105,15 +114,6 @@ And to see logs of the service runs:
 ```bash
 journalctl -u rstphack.service
 ```
-
----
-
-## Motivation
-
-Ubiquiti does not provide an official method to adjust RSTP/STP per-port costs on UniFi switches.  
-While it is possible to connect via SSH and use well-known commands to modify these values, such changes are **not persistent**: they are lost after a reboot or reprovisioning.  
-
-To date, no native mechanism ensures persistence of these settings.
 
 ---
 
