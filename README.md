@@ -45,9 +45,11 @@ Add a line to run the script every 5 minutes (adjust as needed):
 */5 * * * * /usr/local/bin/rstphack -q 00:11:22:33:44:55 3 200000 admin@192.168.1.10
 ```
 
-This ensures the preferred STP cost is enforced automatically after reboots or reprovisioning.  
+This ensures the preferred STP cost is enforced automatically after reboots or reprovisioning. Also, multiple ports can have their cost altered using multiple crontab lines, provided they are managed by the same controller and are on the same site.
 
 7. **Alternative: Automate with systemd**  
+
+Instead of using cron, you can use **systemd** timers for better integration with modern Linux systems.
 
 Create a service file `/etc/systemd/system/rstphack.service`:  
 ```ini
@@ -73,10 +75,35 @@ Unit=rstphack.service
 WantedBy=timers.target
 ```
 
+This will run `rstphack.service` automatically every 5 minutes (as defined in the timer). Multiple ports can have their cost altered using multiple ÈXecStart`lines, provided they are managed by the same controller and are on the same site.
+
+### Sample systemd Files
+
+Two unit files are provided as examples:
+
+- [`rstphack.service`](./rstphack.service)  
+- [`rstphack.timer`](./rstphack.timer)
+
+Place both files in `/etc/systemd/system/`:
+
+### Activation
+
 Enable and start the timer:  
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now rstphack.timer
+```
+To check status:
+
+```bash
+systemctl status rstphack.timer
+```
+
+And to see logs of the service runs:
+
+```bash
+journalctl -u rstphack.service
 ```
 
 ---
@@ -124,9 +151,9 @@ The script interacts with the unpublished UniFi Controller API and uses SSH to a
 4. Compare current and desired costs.  
 5. If changes are needed, generate the correct port identifier (based on media type).  
 6. Execute the required commands on the switch via SSH:  
-   ```
+   ```switch
    cli -c "configure" -c "interface {if_id}" -c "spanning-tree cost {required_cost}"
-   ```  
+   ``` 
 
 > **Note:** There is no programatically way to ensure the command executed correctly on the switch, except for waiting for the new state to propagate to the UniFi Controller.
 
@@ -229,12 +256,6 @@ The script maps ports automatically:
 
 ---
 
-## SSH Authentication
-
-Authentication with the switch is via SSH keys, that is setup using the UniFi Controller UI (`Device&rarr;->Device Updates and Settings` on the top right corner).
-
----
-
 ## Output and Exit Codes
 
 When not run with `--quiet`, the script outputs status messages with:  
@@ -247,6 +268,12 @@ Exit codes:
 
 ---
 
+## SSH Authentication
+
+Authentication with the switch uses SSH keys. Use the UniFi Controller UI to set it up (`Device→Device Updates and Settings` on the top right corner).
+
+---
+
 ## Security Considerations
 
 - **SSL Verification** is disabled for Controller access. This avoids connection issues and complex settings.   
@@ -256,62 +283,18 @@ Exit codes:
 ## Possible Enhancements
 
 - Support switches where `cli` is only an alias to `telnet localhost`.  
-- Add direct verification of port cost on the switch.  
+- Add direct verification of port cost on the switch.
+- Use of a configuration file for Controller and switches information
 
 ---
-
-## License
-
-This script is provided under the MIT License, without warranty, for educational and operational purposes.  
-
-
----
-
-## Systemd Unit Files
-
-Instead of using cron, you can use **systemd** timers for better integration with modern Linux systems.
-
-### Files
-
-Two unit files are provided as examples:
-
-- [`rstphack.service`](./rstphack.service)  
-- [`rstphack.timer`](./rstphack.timer)
-
-Place both files in `/etc/systemd/system/`:
-
-```bash
-sudo cp rstphack.service /etc/systemd/system/
-sudo cp rstphack.timer /etc/systemd/system/
-```
-
-### Activation
-
-Reload the systemd daemon and enable the timer:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now rstphack.timer
-```
-
-This will run `rstphack.service` automatically every 5 minutes (as defined in the timer).
-
-To check status:
-
-```bash
-systemctl status rstphack.timer
-```
-
-And to see logs of the service runs:
-
-```bash
-journalctl -u rstphack.service
-```
-
----
-
 
 ## Version History
 
 - **0.9.1** – Added systemd unit files and instructions.  
 - **0.9** – Initial release with cron example.
+
+---
+
+## License
+
+This script is provided under the MIT License, without warranty, for educational and operational purposes.
